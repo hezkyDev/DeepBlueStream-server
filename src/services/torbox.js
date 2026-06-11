@@ -234,6 +234,24 @@ async function createTorrentFromMagnet(magnet) {
     return response.data;
 }
 
+async function deleteTorrent(torrentId) {
+    const response = await axios.post(
+        "https://api.torbox.app/v1/api/torrents/controltorrent",
+        {
+            torrent_id: torrentId,
+            operation: "delete"
+        },
+        {
+            headers: {
+                Authorization: `Bearer ${API_KEY}`,
+                "Content-Type": "application/json"
+            }
+        }
+    );
+
+    return response.data;
+}
+
 async function getTorrentById(torrentId) {
     const torrents = await getMyTorrents();
 
@@ -281,5 +299,6 @@ module.exports = {
     createTorrentFromMagnet,
     findTorrentByHash,
     getTorrentById,
+    deleteTorrent,
     getCachedEntriesFromCheckCached
 };

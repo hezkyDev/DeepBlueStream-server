@@ -10,7 +10,12 @@ const {
     searchMovie,
     searchSeries,
     getMovieByImdbId,
-    getSeriesByImdbId
+    getSeriesByImdbId,
+    discoverMovies,
+    discoverSeries,
+    getMovieVideos,
+    getSeriesVideos,
+    extractTrailers
 } = require("./services/tmdb");
 
 const {
@@ -32,6 +37,9 @@ const {
 
 const { getSubtitlesByHash } = require("./services/opensubtitles");
 
+const { getFavoritesByType, findFavoriteByTmdbId } = require("./services/favorites");
+const { onFavoritePlayback } = require("./services/favoritesScheduler");
+
 const PORT = 7001;
 
 const PLACEHOLDER_POSTER =
@@ -42,6 +50,33 @@ const TORBOX_RECENT_LIMIT = 20;
 const TORRENTS_CACHE_TTL_MS = 60 * 1000;
 const MAX_STREAMS_PER_ITEM = 8;
 const TORBOX_REQUEST_DELAY_MS = 700;
+const CATALOG_PAGE_SIZE = 20;
+
+const MOVIE_GENRES = {
+    "Action": 28,
+    "Animation": 16,
+    "Comedy": 35,
+    "Crime": 80,
+    "Documentary": 99,
+    "Drama": 18,
+    "Fantasy": 14,
+    "Horror": 27,
+    "Romance": 10749,
+    "Sci-Fi": 878,
+    "Thriller": 53
+};
+
+const SERIES_GENRES = {
+    "Action & Adventure": 10759,
+    "Animation": 16,
+    "Comedy": 35,
+    "Crime": 80,
+    "Documentary": 99,
+    "Drama": 18,
+    "Mystery": 9648,
+    "Reality": 10764,
+    "Sci-Fi & Fantasy": 10765
+};
 
 let torrentsCache = {
     data: null,
@@ -112,6 +147,39 @@ const manifest = {
             type: "anime",
             id: "torbox-recent-anime",
             name: "DeepBlueStream - Recently Added Anime"
+        },
+        {
+            type: "movie",
+            id: "torbox-discover-movies",
+            name: "DeepBlueStream - Discover Movies",
+            extra: [
+                { name: "genre", isRequired: false, options: Object.keys(MOVIE_GENRES) },
+                { name: "skip", isRequired: false }
+            ]
+        },
+        {
+            type: "series",
+            id: "torbox-discover-series",
+            name: "DeepBlueStream - Discover Series",
+            extra: [
+                { name: "genre", isRequired: false, options: Object.keys(SERIES_GENRES) },
+                { name: "skip", isRequired: false }
+            ]
+        },
+        {
+            type: "movie",
+            id: "torbox-favorites-movies",
+            name: "DeepBlueStream - Favorites"
+        },
+        {
+            type: "series",
+            id: "torbox-favorites-series",
+            name: "DeepBlueStream - Favorites"
+        },
+        {
+            type: "anime",
+            id: "torbox-favorites-anime",
+            name: "DeepBlueStream - Favorites"
         }
     ]
 };
@@ -758,6 +826,101 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
             };
         }
 
+        if (id === "torbox-discover-movies") {
+            const genreId = extra && extra.genre ? MOVIE_GENRES[extra.genre] : undefined;
+            const page = extra && extra.skip ? Math.floor(Number(extra.skip) / CATALOG_PAGE_SIZE) + 1 : 1;
+
+            const movies = await discoverMovies({ genreId, page });
+
+            return {
+                metas: movies.map(movie => ({
+                    id: `dbs:${movie.id}`,
+                    type: "movie",
+                    name: movie.title,
+                    poster: movie.poster_path
+                        ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+                        : PLACEHOLDER_POSTER,
+                    background: movie.backdrop_path
+                        ? `https://image.tmdb.org/t/p/original${movie.backdrop_path}`
+                        : undefined,
+                    description: movie.overview || undefined,
+                    releaseInfo: movie.release_date || undefined
+                }))
+            };
+        }
+
+        if (id === "torbox-discover-series") {
+            const genreId = extra && extra.genre ? SERIES_GENRES[extra.genre] : undefined;
+            const page = extra && extra.skip ? Math.floor(Number(extra.skip) / CATALOG_PAGE_SIZE) + 1 : 1;
+
+            const series = await discoverSeries({ genreId, page });
+
+            return {
+                metas: series.map(item => ({
+                    id: `dbs-series:${item.id}`,
+                    type: "series",
+                    name: item.name,
+                    poster: item.poster_path
+                        ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+                        : PLACEHOLDER_POSTER,
+                    background: item.backdrop_path
+                        ? `https://image.tmdb.org/t/p/original${item.backdrop_path}`
+                        : undefined,
+                    description: item.overview || undefined,
+                    releaseInfo: item.first_air_date || undefined
+                }))
+            };
+        }
+
+        if (id === "torbox-favorites-movies") {
+            const favorites = getFavoritesByType("movie");
+
+            const movies = await Promise.all(
+                favorites.map(favorite => getMovieDetails(favorite.tmdbId))
+            );
+
+            return {
+                metas: movies.map(movie => ({
+                    id: `dbs:${movie.id}`,
+                    type: "movie",
+                    name: movie.title,
+                    poster: movie.poster_path
+                        ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+                        : PLACEHOLDER_POSTER,
+                    background: movie.backdrop_path
+                        ? `https://image.tmdb.org/t/p/original${movie.backdrop_path}`
+                        : undefined,
+                    description: movie.overview || undefined,
+                    releaseInfo: movie.release_date || undefined
+                }))
+            };
+        }
+
+        if (id === "torbox-favorites-series" || id === "torbox-favorites-anime") {
+            const favoriteType = id === "torbox-favorites-anime" ? "anime" : "series";
+            const favorites = getFavoritesByType(favoriteType);
+
+            const seriesList = await Promise.all(
+                favorites.map(favorite => getSeriesDetails(favorite.tmdbId))
+            );
+
+            return {
+                metas: seriesList.map(series => ({
+                    id: `${favoriteType === "anime" ? "dbs-anime" : "dbs-series"}:${series.id}`,
+                    type: favoriteType,
+                    name: series.name,
+                    poster: series.poster_path
+                        ? `https://image.tmdb.org/t/p/w500${series.poster_path}`
+                        : PLACEHOLDER_POSTER,
+                    background: series.backdrop_path
+                        ? `https://image.tmdb.org/t/p/original${series.backdrop_path}`
+                        : undefined,
+                    description: series.overview || undefined,
+                    releaseInfo: series.first_air_date || undefined
+                }))
+            };
+        }
+
         return { metas: [] };
 
     } catch (err) {
@@ -773,6 +936,7 @@ builder.defineMetaHandler(async ({ id }) => {
         if (id.startsWith("dbs-series:")) {
             const tmdbId = id.replace("dbs-series:", "");
             const series = await getSeriesDetails(tmdbId);
+            const trailerStreams = extractTrailers(await getSeriesVideos(tmdbId));
 
             return {
                 meta: {
@@ -787,7 +951,8 @@ builder.defineMetaHandler(async ({ id }) => {
                         : undefined,
                     description: series.overview,
                     releaseInfo: series.first_air_date,
-                    genres: series.genres ? series.genres.map(g => g.name) : []
+                    genres: series.genres ? series.genres.map(g => g.name) : [],
+                    trailerStreams
                 }
             };
         }
@@ -795,6 +960,7 @@ builder.defineMetaHandler(async ({ id }) => {
         if (id.startsWith("dbs-anime:")) {
             const tmdbId = id.replace("dbs-anime:", "");
             const series = await getSeriesDetails(tmdbId);
+            const trailerStreams = extractTrailers(await getSeriesVideos(tmdbId));
 
             return {
                 meta: {
@@ -809,7 +975,8 @@ builder.defineMetaHandler(async ({ id }) => {
                         : undefined,
                     description: series.overview,
                     releaseInfo: series.first_air_date,
-                    genres: series.genres ? series.genres.map(g => g.name) : []
+                    genres: series.genres ? series.genres.map(g => g.name) : [],
+                    trailerStreams
                 }
             };
         }
@@ -817,6 +984,7 @@ builder.defineMetaHandler(async ({ id }) => {
         if (id.startsWith("dbs:")) {
             const tmdbId = id.replace("dbs:", "");
             const movie = await getMovieDetails(tmdbId);
+            const trailerStreams = extractTrailers(await getMovieVideos(tmdbId));
 
             return {
                 meta: {
@@ -832,7 +1000,8 @@ builder.defineMetaHandler(async ({ id }) => {
                     description: movie.overview,
                     releaseInfo: movie.release_date,
                     runtime: movie.runtime ? `${movie.runtime} min` : undefined,
-                    genres: movie.genres ? movie.genres.map(g => g.name) : []
+                    genres: movie.genres ? movie.genres.map(g => g.name) : [],
+                    trailerStreams
                 }
             };
         }
@@ -1068,6 +1237,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
 				    );
 
 				    streams.push(...cachedSearchStreams);
+				}
+
+				const favoriteType = (type === "anime" || type === "series")
+				    ? findFavoriteByTmdbId(type, series.id)
+				    : undefined;
+
+				if (favoriteType && season !== undefined && episode !== undefined) {
+				    const playedTorrentId = streams.find(stream => stream.torrentId)?.torrentId;
+				    onFavoritePlayback(series, season, episode, playedTorrentId);
+				}
+
+				for (const stream of streams) {
+				    delete stream.torrentId;
 				}
 
 				console.log("Final streams returned:", streams.length);

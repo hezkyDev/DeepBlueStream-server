@@ -242,6 +242,7 @@ async function buildStreamsFromCachedTorrentResults(torrentResults, episodeText 
                     episodeText
                 ),
                 url,
+                torrentId,
                 behaviorHints: {
                     notWebReady: false
                 }
@@ -320,6 +321,7 @@ async function buildStreamsFromUncachedTorrentResults(torrentResults, episodeTex
                     episodeText
                 ),
                 url,
+                torrentId,
                 behaviorHints: {
                     notWebReady: false
                 }

@@ -106,6 +106,74 @@ async function searchSeries(query, year) {
     return response.data.results || [];
 }
 
+async function discoverMovies({ genreId, page = 1 } = {}) {
+    const params = {
+        api_key: API_KEY,
+        language: "en-US",
+        sort_by: "popularity.desc",
+        include_adult: false,
+        page
+    };
+
+    if (genreId) {
+        params.with_genres = genreId;
+    }
+
+    const response = await axios.get(`${BASE_URL}/discover/movie`, { params });
+
+    return response.data.results || [];
+}
+
+async function discoverSeries({ genreId, page = 1 } = {}) {
+    const params = {
+        api_key: API_KEY,
+        language: "en-US",
+        sort_by: "popularity.desc",
+        include_adult: false,
+        page
+    };
+
+    if (genreId) {
+        params.with_genres = genreId;
+    }
+
+    const response = await axios.get(`${BASE_URL}/discover/tv`, { params });
+
+    return response.data.results || [];
+}
+
+async function getMovieVideos(movieId) {
+    return withCache(`movie-videos:${movieId}`, async () => {
+        const response = await axios.get(`${BASE_URL}/movie/${movieId}/videos`, {
+            params: {
+                api_key: API_KEY,
+                language: "en-US"
+            }
+        });
+
+        return response.data.results || [];
+    });
+}
+
+async function getSeriesVideos(seriesId) {
+    return withCache(`series-videos:${seriesId}`, async () => {
+        const response = await axios.get(`${BASE_URL}/tv/${seriesId}/videos`, {
+            params: {
+                api_key: API_KEY,
+                language: "en-US"
+            }
+        });
+
+        return response.data.results || [];
+    });
+}
+
+function extractTrailers(videos) {
+    return videos
+        .filter(video => video.site === "YouTube" && video.type === "Trailer")
+        .map(video => ({ title: video.name || "Trailer", ytId: video.key }));
+}
+
 async function getMovieByImdbId(imdbId) {
     return withCache(`movie-imdb:${imdbId}`, async () => {
         const response = await axios.get(`${BASE_URL}/find/${imdbId}`, {
@@ -154,5 +222,10 @@ module.exports = {
     searchMovie,
     searchSeries,
     getMovieByImdbId,
-    getSeriesByImdbId
+    getSeriesByImdbId,
+    discoverMovies,
+    discoverSeries,
+    getMovieVideos,
+    getSeriesVideos,
+    extractTrailers
 };
