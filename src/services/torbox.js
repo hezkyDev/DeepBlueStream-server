@@ -234,6 +234,12 @@ async function createTorrentFromMagnet(magnet) {
     return response.data;
 }
 
+async function getTorrentById(torrentId) {
+    const torrents = await getMyTorrents();
+
+    return torrents.find(torrent => torrent.id === torrentId);
+}
+
 async function findTorrentByHash(infoHash) {
     const normalizedHash = infoHash.toLowerCase();
     const torrents = await getMyTorrents();
@@ -274,5 +280,6 @@ module.exports = {
     buildMagnetFromHash,
     createTorrentFromMagnet,
     findTorrentByHash,
+    getTorrentById,
     getCachedEntriesFromCheckCached
 };

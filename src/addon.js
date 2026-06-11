@@ -30,6 +30,8 @@ const {
     searchCachedStreamsForSeriesEpisode
 } = require("./services/searchStreams");
 
+const { getSubtitlesByHash } = require("./services/opensubtitles");
+
 const PORT = 7001;
 
 const PLACEHOLDER_POSTER =
@@ -54,7 +56,7 @@ const manifest = {
     name: "DeepBlueStream",
     description: "Personal Streaming Platform",
 
-    resources: ["catalog", "meta", "stream"],
+    resources: ["catalog", "meta", "stream", "subtitles"],
 
     types: ["movie", "series", "anime"],
 
@@ -514,15 +516,33 @@ function parseStremioId(id) {
     };
 }
 
-function torrentMatchesEpisode(torrent, file, season, episode) {
-    const text = `${torrent.name || ""} ${file.name || ""}`;
+function computeAbsoluteEpisode(series, season, episode) {
+    if (!series || !Array.isArray(series.seasons) || !season || !episode) {
+        return undefined;
+    }
 
-    if (!episode) {
-        return true;
+    let absolute = episode;
+
+    for (const seasonInfo of series.seasons) {
+        if (
+            seasonInfo.season_number > 0 &&
+            seasonInfo.season_number < season &&
+            typeof seasonInfo.episode_count === "number"
+        ) {
+            absolute += seasonInfo.episode_count;
+        }
+    }
+
+    return absolute;
+}
+
+function episodeNumberMatches(text, episodeNumber) {
+    if (!episodeNumber) {
+        return false;
     }
 
     const sxePattern = new RegExp(
-        `S0?${season || 1}E0?${episode}\\b`,
+        `\\bS\\d{1,2}E0*${episodeNumber}\\b`,
         "i"
     );
 
@@ -530,12 +550,35 @@ function torrentMatchesEpisode(torrent, file, season, episode) {
         return true;
     }
 
-    const episodePattern = new RegExp(
-        `\\b(Episode\\s*)?0?${episode}\\b`,
+    const taggedEpisodePattern = new RegExp(
+        `\\b(?:E|EP|Episode)\\s*0*${episodeNumber}\\b`,
         "i"
     );
 
-    return episodePattern.test(text);
+    if (taggedEpisodePattern.test(text)) {
+        return true;
+    }
+
+    const dashEpisodePattern = new RegExp(
+        `[\\s._-]0*${episodeNumber}\\b(?!\\d)`,
+        "i"
+    );
+
+    return dashEpisodePattern.test(text);
+}
+
+function torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode) {
+    const text = `${torrent.name || ""} ${file.name || ""}`;
+
+    if (!episode) {
+        return true;
+    }
+
+    if (absoluteEpisode && absoluteEpisode !== episode) {
+        return episodeNumberMatches(text, absoluteEpisode);
+    }
+
+    return episodeNumberMatches(text, episode);
 }
 
 function seriesTitleMatches(groupTitle, tmdbTitle) {
@@ -959,13 +1002,18 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                 const series = await getSeriesDetails(seriesSearchResult.id);
 
+                const absoluteEpisode = computeAbsoluteEpisode(series, season, episode);
+
                 console.log(
                     "Searching Torbox for IMDb series/anime:",
                     series.name,
                     "S",
                     season,
                     "E",
-                    episode
+                    episode,
+                    "(absolute:",
+                    absoluteEpisode,
+                    ")"
                 );
 
                 const torrents = await getMyTorrentsCached();
@@ -985,7 +1033,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                         const videoFiles = torrent.files
                             .filter(isVideoFile)
-                            .filter(file => torrentMatchesEpisode(torrent, file, season, episode))
+                            .filter(file => torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode))
                             .slice(0, 2);
 
                         for (const file of videoFiles) {
@@ -1232,6 +1280,24 @@ builder.defineStreamHandler(async ({ type, id }) => {
     } catch (err) {
         console.error("Stream error:", err.response?.data || err.message);
         return { streams: [] };
+    }
+});
+
+builder.defineSubtitlesHandler(async ({ id, extra }) => {
+    try {
+        const videoHash = extra?.videoHash;
+
+        if (!videoHash) {
+            return { subtitles: [] };
+        }
+
+        const subtitles = await getSubtitlesByHash(videoHash);
+
+        return { subtitles };
+
+    } catch (err) {
+        console.error("Subtitles error:", err.response?.data || err.message);
+        return { subtitles: [] };
     }
 });
 
