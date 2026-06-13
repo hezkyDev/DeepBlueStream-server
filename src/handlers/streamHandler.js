@@ -31,13 +31,15 @@ const {
     seriesTitleMatches
 } = require("../lib/streamHelpers");
 
-const { MAX_STREAMS_PER_ITEM } = require("../constants");
+const { mapLimit } = require("../utils");
+
+const { MAX_STREAMS_PER_ITEM, DOWNLOAD_LINK_CONCURRENCY } = require("../constants");
 
 async function buildStreamsFromTorrents(torrents, prefix, { season, episode, absoluteEpisode } = {}) {
-    const streams = [];
+    const candidates = [];
 
     for (const torrent of torrents) {
-        if (streams.length >= MAX_STREAMS_PER_ITEM) {
+        if (candidates.length >= MAX_STREAMS_PER_ITEM) {
             break;
         }
 
@@ -51,27 +53,31 @@ async function buildStreamsFromTorrents(torrents, prefix, { season, episode, abs
             .slice(0, 2);
 
         for (const file of videoFiles) {
-            if (streams.length >= MAX_STREAMS_PER_ITEM) {
+            if (candidates.length >= MAX_STREAMS_PER_ITEM) {
                 break;
             }
 
-            const url = await safeRequestDownloadLink(torrent.id, file.id);
-
-            if (!url) {
-                continue;
-            }
-
-            streams.push({
-                title: buildStreamTitle(prefix, file, torrent),
-                url,
-                behaviorHints: {
-                    notWebReady: false
-                }
-            });
+            candidates.push({ torrent, file });
         }
     }
 
-    return streams;
+    const results = await mapLimit(candidates, DOWNLOAD_LINK_CONCURRENCY, async ({ torrent, file }) => {
+        const url = await safeRequestDownloadLink(torrent.id, file.id);
+
+        if (!url) {
+            return null;
+        }
+
+        return {
+            title: buildStreamTitle(prefix, file, torrent),
+            url,
+            behaviorHints: {
+                notWebReady: false
+            }
+        };
+    });
+
+    return results.filter(Boolean);
 }
 
 async function streamFromImdbMovie(imdbId) {
@@ -202,23 +208,23 @@ async function streamFromTorboxTorrent(torrentId) {
         .filter(isVideoFile)
         .slice(0, MAX_STREAMS_PER_ITEM);
 
-    const streams = [];
-
-    for (const file of videoFiles) {
+    const results = await mapLimit(videoFiles, DOWNLOAD_LINK_CONCURRENCY, async file => {
         const url = await safeRequestDownloadLink(torrent.id, file.id);
 
         if (!url) {
-            continue;
+            return null;
         }
 
-        streams.push({
+        return {
             title: buildStreamTitle("Torbox Library", file, torrent),
             url,
             behaviorHints: {
                 notWebReady: false
             }
-        });
-    }
+        };
+    });
+
+    const streams = results.filter(Boolean);
 
     console.log("Final streams returned:", streams.length);
     return { streams };
