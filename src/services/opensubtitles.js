@@ -59,8 +59,10 @@ function pickBestPerLanguage(results) {
     return [...byLanguage.values()];
 }
 
+const VALID_HASH_PATTERN = /^[0-9a-f]{16}$/i;
+
 async function getSubtitlesByHash(videoHash) {
-    if (!API_KEY || !videoHash) {
+    if (!API_KEY || !videoHash || !VALID_HASH_PATTERN.test(videoHash)) {
         return [];
     }
 
