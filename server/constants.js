@@ -1,0 +1,10 @@
+const API_PORT = 7002;
+
+const PROGRESS_MIN_RATIO = 0.02;
+const PROGRESS_DONE_RATIO = 0.95;
+
+module.exports = {
+    API_PORT,
+    PROGRESS_MIN_RATIO,
+    PROGRESS_DONE_RATIO
+};

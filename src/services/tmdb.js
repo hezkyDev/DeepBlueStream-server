@@ -20,26 +20,38 @@ async function withCache(key, fn) {
     return data;
 }
 
-async function getTrendingMovies() {
-    const response = await axios.get(`${BASE_URL}/trending/movie/week`, {
-        params: {
-            api_key: API_KEY,
-            language: "en-US"
-        }
+async function testConnection() {
+    const response = await axios.get(`${BASE_URL}/configuration`, {
+        params: { api_key: API_KEY }
     });
 
-    return response.data.results || [];
+    return response.data;
+}
+
+async function getTrendingMovies() {
+    return withCache("trending:movie", async () => {
+        const response = await axios.get(`${BASE_URL}/trending/movie/week`, {
+            params: {
+                api_key: API_KEY,
+                language: "en-US"
+            }
+        });
+
+        return response.data.results || [];
+    });
 }
 
 async function getTrendingSeries() {
-    const response = await axios.get(`${BASE_URL}/trending/tv/week`, {
-        params: {
-            api_key: API_KEY,
-            language: "en-US"
-        }
-    });
+    return withCache("trending:series", async () => {
+        const response = await axios.get(`${BASE_URL}/trending/tv/week`, {
+            params: {
+                api_key: API_KEY,
+                language: "en-US"
+            }
+        });
 
-    return response.data.results || [];
+        return response.data.results || [];
+    });
 }
 
 async function getMovieDetails(movieId) {
@@ -107,39 +119,43 @@ async function searchSeries(query, year) {
 }
 
 async function discoverMovies({ genreId, page = 1 } = {}) {
-    const params = {
-        api_key: API_KEY,
-        language: "en-US",
-        sort_by: "popularity.desc",
-        include_adult: false,
-        page
-    };
+    return withCache(`discover:movie:${genreId || "all"}:${page}`, async () => {
+        const params = {
+            api_key: API_KEY,
+            language: "en-US",
+            sort_by: "popularity.desc",
+            include_adult: false,
+            page
+        };
 
-    if (genreId) {
-        params.with_genres = genreId;
-    }
+        if (genreId) {
+            params.with_genres = genreId;
+        }
 
-    const response = await axios.get(`${BASE_URL}/discover/movie`, { params });
+        const response = await axios.get(`${BASE_URL}/discover/movie`, { params });
 
-    return response.data.results || [];
+        return response.data.results || [];
+    });
 }
 
 async function discoverSeries({ genreId, page = 1 } = {}) {
-    const params = {
-        api_key: API_KEY,
-        language: "en-US",
-        sort_by: "popularity.desc",
-        include_adult: false,
-        page
-    };
+    return withCache(`discover:series:${genreId || "all"}:${page}`, async () => {
+        const params = {
+            api_key: API_KEY,
+            language: "en-US",
+            sort_by: "popularity.desc",
+            include_adult: false,
+            page
+        };
 
-    if (genreId) {
-        params.with_genres = genreId;
-    }
+        if (genreId) {
+            params.with_genres = genreId;
+        }
 
-    const response = await axios.get(`${BASE_URL}/discover/tv`, { params });
+        const response = await axios.get(`${BASE_URL}/discover/tv`, { params });
 
-    return response.data.results || [];
+        return response.data.results || [];
+    });
 }
 
 async function getMovieVideos(movieId) {
@@ -215,6 +231,7 @@ async function getSeriesByImdbId(imdbId) {
 }
 
 module.exports = {
+    testConnection,
     getTrendingMovies,
     getTrendingSeries,
     getMovieDetails,

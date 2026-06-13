@@ -23,6 +23,16 @@ function normalizeSearchResults(results) {
     });
 }
 
+async function testConnection() {
+    const response = await axios.get(`${PROWLARR_URL}/api/v1/system/status`, {
+        headers: {
+            "X-Api-Key": PROWLARR_API_KEY
+        }
+    });
+
+    return response.data;
+}
+
 async function searchMovies(query, year) {
     const searchQuery = year ? `${query} ${year}` : query;
 
@@ -54,5 +64,6 @@ async function searchMovies(query, year) {
 }
 
 module.exports = {
+    testConnection,
     searchMovies
 };
