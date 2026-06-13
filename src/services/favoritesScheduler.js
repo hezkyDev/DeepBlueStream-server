@@ -4,6 +4,7 @@ const { deleteTorrent } = require("./torbox");
 
 const DEFAULT_RUNTIME_MINUTES = 24;
 const CLEANUP_BUFFER_MINUTES = 30;
+const PREFETCH_DELAY_MS = 15 * 1000;
 
 const cleanupTimers = new Map();
 
@@ -76,7 +77,11 @@ function onFavoritePlayback(series, season, episode, torrentId) {
         scheduleTorrentCleanup(torrentId, series);
     }
 
-    prefetchNextEpisode(series, season, episode);
+    // Delay so the pre-fetch search doesn't compete with the
+    // current episode's stream/download-link requests on Torbox.
+    setTimeout(() => {
+        prefetchNextEpisode(series, season, episode);
+    }, PREFETCH_DELAY_MS);
 }
 
 module.exports = {
