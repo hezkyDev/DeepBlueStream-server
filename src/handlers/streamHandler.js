@@ -27,39 +27,60 @@ const {
     buildStreamTitle,
     parseStremioId,
     computeAbsoluteEpisode,
+    strictEpisodeNumberMatches,
+    episodeNumberMatches,
     torrentMatchesEpisode,
-    seriesTitleMatches
+    seriesTitleMatches,
+    sortCandidatesByQuality,
+    dedupeStreamCandidates
 } = require("../lib/streamHelpers");
 
 const { mapLimit } = require("../utils");
 
 const { MAX_STREAMS_PER_ITEM, DOWNLOAD_LINK_CONCURRENCY } = require("../constants");
 
-async function buildStreamsFromTorrents(torrents, prefix, { season, episode, absoluteEpisode } = {}) {
+function collectEpisodeCandidates(torrents, season, episode, absoluteEpisode, matchFn) {
     const candidates = [];
 
     for (const torrent of torrents) {
-        if (candidates.length >= MAX_STREAMS_PER_ITEM) {
-            break;
-        }
-
         const videoFiles = torrent.files
             .filter(isVideoFile)
             .filter(file =>
                 season === undefined && episode === undefined
                     ? true
-                    : torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode)
+                    : torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode, matchFn)
             )
             .slice(0, 2);
 
         for (const file of videoFiles) {
-            if (candidates.length >= MAX_STREAMS_PER_ITEM) {
-                break;
-            }
-
             candidates.push({ torrent, file });
         }
     }
+
+    return candidates;
+}
+
+async function buildStreamsFromTorrents(torrents, prefix, { season, episode, absoluteEpisode } = {}) {
+    let candidates;
+
+    if (season === undefined && episode === undefined) {
+        candidates = collectEpisodeCandidates(torrents, season, episode, absoluteEpisode);
+    } else {
+        // Prefer strict SxxExx/"EP N" matches; only fall back to the looser
+        // dash-number pattern (which can false-positive on specials/OVAs
+        // titled like "... - 01") if nothing strict was found.
+        candidates = collectEpisodeCandidates(torrents, season, episode, absoluteEpisode, strictEpisodeNumberMatches);
+
+        if (candidates.length === 0) {
+            candidates = collectEpisodeCandidates(torrents, season, episode, absoluteEpisode, episodeNumberMatches);
+        }
+    }
+
+    const getSourceName = ({ torrent, file }) => file.name || torrent.name;
+
+    candidates = sortCandidatesByQuality(candidates, getSourceName);
+    candidates = dedupeStreamCandidates(candidates, getSourceName, ({ file }) => file.size);
+    candidates = candidates.slice(0, MAX_STREAMS_PER_ITEM);
 
     const results = await mapLimit(candidates, DOWNLOAD_LINK_CONCURRENCY, async ({ torrent, file }) => {
         const url = await safeRequestDownloadLink(torrent.id, file.id);
@@ -112,20 +133,11 @@ async function streamFromImdbMovie(imdbId) {
     return { streams };
 }
 
-async function streamFromImdbSeries(imdbId, type, season, episode) {
-    const seriesSearchResult = await getSeriesByImdbId(imdbId);
-
-    if (!seriesSearchResult) {
-        console.log("No TMDB series found for IMDb ID:", imdbId);
-        return { streams: [] };
-    }
-
-    const series = await getSeriesDetails(seriesSearchResult.id);
-
+async function resolveSeriesEpisodeStreams(series, type, season, episode) {
     const absoluteEpisode = computeAbsoluteEpisode(series, season, episode);
 
     console.log(
-        "Searching Torbox for IMDb series/anime:",
+        "Searching Torbox for series/anime:",
         series.name,
         "S",
         season,
@@ -153,13 +165,14 @@ async function streamFromImdbSeries(imdbId, type, season, episode) {
         }));
     }
 
-    if (streams.length === 0) {
+    if (streams.length === 0 && season !== undefined && episode !== undefined) {
         console.log("No Torbox Library episode found. Searching Prowlarr + Torbox cache...");
 
         const cachedSearchStreams = await searchCachedStreamsForSeriesEpisode(
             series,
             season,
-            episode
+            episode,
+            absoluteEpisode
         );
 
         streams.push(...cachedSearchStreams);
@@ -180,6 +193,19 @@ async function streamFromImdbSeries(imdbId, type, season, episode) {
 
     console.log("Final streams returned:", streams.length);
     return { streams };
+}
+
+async function streamFromImdbSeries(imdbId, type, season, episode) {
+    const seriesSearchResult = await getSeriesByImdbId(imdbId);
+
+    if (!seriesSearchResult) {
+        console.log("No TMDB series found for IMDb ID:", imdbId);
+        return { streams: [] };
+    }
+
+    const series = await getSeriesDetails(seriesSearchResult.id);
+
+    return resolveSeriesEpisodeStreams(series, type, season, episode);
 }
 
 async function streamFromTorboxGroup(groupKey) {
@@ -230,31 +256,10 @@ async function streamFromTorboxTorrent(torrentId) {
     return { streams };
 }
 
-async function streamFromDbsSeries(tmdbId) {
+async function streamFromDbsSeries(tmdbId, type, season, episode) {
     const series = await getSeriesDetails(tmdbId);
 
-    console.log("Searching Torbox for series/anime:", series.name);
-
-    const torrents = await getMyTorrentsCached();
-
-    const matchingGroups = groupTorrentsByMedia(getPlayableTorrents(torrents))
-        .filter(group => seriesTitleMatches(group.title, series.name));
-
-    const streams = [];
-
-    for (const group of matchingGroups) {
-        streams.push(...await buildStreamsFromTorrents(group.torrents, "Torbox Library"));
-    }
-
-    if (streams.length === 0) {
-        console.log("No Torbox Library series stream found.");
-
-        // Catalog-based series cards do not include selected season/episode yet,
-        // so there is no episode number to run the Prowlarr fallback against here.
-    }
-
-    console.log("Final streams returned:", streams.length);
-    return { streams };
+    return resolveSeriesEpisodeStreams(series, type, season, episode);
 }
 
 async function streamFromDbsMovie(tmdbId) {
@@ -320,11 +325,17 @@ async function streamHandler({ type, id }) {
         }
 
         if (id.startsWith("dbs-series:") || id.startsWith("dbs-anime:")) {
-            const tmdbId = id
-                .replace("dbs-series:", "")
-                .replace("dbs-anime:", "");
+            const seriesType = id.startsWith("dbs-anime:") ? "anime" : "series";
+            const idPrefix = seriesType === "anime" ? "dbs-anime:" : "dbs-series:";
+            const parts = id.replace(idPrefix, "").split(":");
 
-            return streamFromDbsSeries(tmdbId);
+            const tmdbId = parts[0];
+            const season = parts[1] !== undefined ? Number(parts[1]) : undefined;
+            const episode = parts[2] !== undefined ? Number(parts[2]) : undefined;
+
+            console.log("Parsed DBS series ID:", tmdbId, "Season:", season, "Episode:", episode);
+
+            return streamFromDbsSeries(tmdbId, seriesType, season, episode);
         }
 
         if (id.startsWith("dbs:")) {

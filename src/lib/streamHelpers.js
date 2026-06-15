@@ -1,20 +1,51 @@
+const axios = require("axios");
+
 const { requestDownloadLink, detectQuality, detectCodec, formatBytes } = require("../services/torbox");
 const { sleep, normalizeText } = require("../utils");
 const { extractEpisodeNumber } = require("./torboxLibrary");
-const { TORBOX_REQUEST_DELAY_MS } = require("../constants");
+const { TORBOX_REQUEST_DELAY_MS, CDN_CHECK_TIMEOUT_MS } = require("../constants");
+
+async function isCdnUrlReachable(url) {
+    try {
+        await axios.get(url, {
+            timeout: CDN_CHECK_TIMEOUT_MS,
+            headers: { Range: "bytes=0-1" },
+            responseType: "stream"
+        }).then(response => response.data.destroy());
+
+        return true;
+    } catch (err) {
+        console.error("CDN node unreachable, skipping:", url.split("?")[0], "-", err.message);
+        return false;
+    }
+}
+
+const DOWNLOAD_LINK_ATTEMPTS = 2;
 
 async function safeRequestDownloadLink(torrentId, fileId) {
-    try {
-        await sleep(TORBOX_REQUEST_DELAY_MS);
-        return await requestDownloadLink(torrentId, fileId);
-    } catch (err) {
-        console.error(
-            "requestDownloadLink failed:",
-            err.response?.data || err.message
-        );
+    for (let attempt = 1; attempt <= DOWNLOAD_LINK_ATTEMPTS; attempt++) {
+        try {
+            await sleep(TORBOX_REQUEST_DELAY_MS);
+            const url = await requestDownloadLink(torrentId, fileId);
 
-        return null;
+            if (url && (await isCdnUrlReachable(url))) {
+                return url;
+            }
+        } catch (err) {
+            console.error(
+                "requestDownloadLink failed:",
+                err.response?.data || err.message
+            );
+        }
+
+        // Torbox's DATABASE_ERROR responses and CDN ECONNRESET errors are
+        // usually transient, so retry once before giving up on this candidate.
+        if (attempt < DOWNLOAD_LINK_ATTEMPTS) {
+            console.log("Retrying requestDownloadLink for torrent", torrentId, "file", fileId);
+        }
     }
+
+    return null;
 }
 
 function buildStreamTitle(prefix, file, torrent) {
@@ -27,7 +58,7 @@ function buildStreamTitle(prefix, file, torrent) {
     const codecText = codec ? ` | ${codec}` : "";
     const episodeText = episodeNumber !== undefined ? ` | EP ${episodeNumber}` : "";
 
-    return `DeepBlueStream\n${prefix}${episodeText} | ${quality} | ${size}${codecText}`;
+    return `${quality}${episodeText}\n${prefix} | ${size}${codecText}`;
 }
 
 function parseStremioId(id) {
@@ -45,7 +76,7 @@ function computeAbsoluteEpisode(series, season, episode) {
         return undefined;
     }
 
-    let absolute = episode;
+    let cumulativeBefore = 0;
 
     for (const seasonInfo of series.seasons) {
         if (
@@ -53,14 +84,22 @@ function computeAbsoluteEpisode(series, season, episode) {
             seasonInfo.season_number < season &&
             typeof seasonInfo.episode_count === "number"
         ) {
-            absolute += seasonInfo.episode_count;
+            cumulativeBefore += seasonInfo.episode_count;
         }
     }
 
-    return absolute;
+    // Some long-running anime number episodes absolutely even within TMDB's
+    // season groupings (e.g. One Piece season 21 covers episodes 892-1088,
+    // not 1-197). If the episode number already exceeds the cumulative count
+    // of prior seasons, it's already an absolute episode number.
+    if (episode > cumulativeBefore) {
+        return episode;
+    }
+
+    return cumulativeBefore + episode;
 }
 
-function episodeNumberMatches(text, episodeNumber) {
+function strictEpisodeNumberMatches(text, episodeNumber) {
     if (!episodeNumber) {
         return false;
     }
@@ -79,19 +118,31 @@ function episodeNumberMatches(text, episodeNumber) {
         "i"
     );
 
-    if (taggedEpisodePattern.test(text)) {
+    return taggedEpisodePattern.test(text);
+}
+
+function episodeNumberMatches(text, episodeNumber) {
+    if (!episodeNumber) {
+        return false;
+    }
+
+    if (strictEpisodeNumberMatches(text, episodeNumber)) {
         return true;
     }
 
+    // Negative lookbehinds avoid matching decimal audio-channel tags like
+    // "5.1" / "7.1" / "DDP5 1 Atmos" and multi-part markers like "(Part 1)" /
+    // "(Pt 1)", which would otherwise look like a "- 1" or ". 1" episode
+    // marker for episode 1.
     const dashEpisodePattern = new RegExp(
-        `[\\s._-]0*${episodeNumber}\\b(?!\\d)`,
+        `(?<![\\d.])(?<!part)(?<!pt)[\\s._-]0*${episodeNumber}\\b(?!\\d)`,
         "i"
     );
 
     return dashEpisodePattern.test(text);
 }
 
-function torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode) {
+function torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode, matchFn = episodeNumberMatches) {
     const text = `${torrent.name || ""} ${file.name || ""}`;
 
     if (!episode) {
@@ -99,10 +150,10 @@ function torrentMatchesEpisode(torrent, file, season, episode, absoluteEpisode) 
     }
 
     if (absoluteEpisode && absoluteEpisode !== episode) {
-        return episodeNumberMatches(text, absoluteEpisode);
+        return matchFn(text, absoluteEpisode);
     }
 
-    return episodeNumberMatches(text, episode);
+    return matchFn(text, episode);
 }
 
 function seriesTitleMatches(groupTitle, tmdbTitle) {
@@ -116,12 +167,50 @@ function seriesTitleMatches(groupTitle, tmdbTitle) {
     );
 }
 
+const QUALITY_RANK = {
+    "4K": 4,
+    "1080p": 3,
+    "720p": 2,
+    "480p": 1,
+    "Unknown": 0
+};
+
+function getQualityRank(name) {
+    return QUALITY_RANK[detectQuality(name)] ?? 0;
+}
+
+function sortCandidatesByQuality(candidates, getSourceName) {
+    return [...candidates].sort((a, b) => getQualityRank(getSourceName(b)) - getQualityRank(getSourceName(a)));
+}
+
+function dedupeStreamCandidates(candidates, getSourceName, getSize) {
+    const seenKeys = new Set();
+    const deduped = [];
+
+    for (const candidate of candidates) {
+        const key = `${detectQuality(getSourceName(candidate))}|${getSize(candidate)}`;
+
+        if (seenKeys.has(key)) {
+            continue;
+        }
+
+        seenKeys.add(key);
+        deduped.push(candidate);
+    }
+
+    return deduped;
+}
+
 module.exports = {
     safeRequestDownloadLink,
     buildStreamTitle,
     parseStremioId,
     computeAbsoluteEpisode,
+    strictEpisodeNumberMatches,
     episodeNumberMatches,
     torrentMatchesEpisode,
-    seriesTitleMatches
+    seriesTitleMatches,
+    getQualityRank,
+    sortCandidatesByQuality,
+    dedupeStreamCandidates
 };

@@ -1,4 +1,5 @@
 const { searchMovies } = require("./prowlarr");
+const { episodeNumberMatches } = require("../lib/streamHelpers");
 
 const {
     checkCached,
@@ -16,7 +17,10 @@ const {
 } = require("./torbox");
 
 const MAX_SEARCH_RESULTS = 5;
-const MAX_SEARCH_STREAMS = 5;
+// Only ever create/queue one Torbox download per video — the client only
+// plays the first stream, so requesting more just clutters the user's
+// Torbox library with unused downloads.
+const MAX_SEARCH_STREAMS = 1;
 const MAX_UNCACHED_ATTEMPTS = 2;
 const TORBOX_REQUEST_DELAY_MS = 700;
 const UNCACHED_POLL_ATTEMPTS = 4;
@@ -64,8 +68,7 @@ function isLikelySameMovie(resultTitle, movieTitle, movieYear) {
 
     const titleMatches =
         normalizedResult === normalizedMovie ||
-        normalizedResult.startsWith(`${normalizedMovie} `) ||
-        normalizedResult.includes(` ${normalizedMovie} `);
+        normalizedResult.startsWith(`${normalizedMovie} `);
 
     const yearMatches =
         !movieYear ||
@@ -80,7 +83,7 @@ function isLikelySameMovie(resultTitle, movieTitle, movieYear) {
     return titleMatches && yearMatches && !looksLikeEpisode;
 }
 
-function isLikelySameSeriesEpisode(resultTitle, seriesTitle, season, episode) {
+function isLikelySameSeriesEpisode(resultTitle, seriesTitle, season, episode, absoluteEpisode) {
     const normalizedResult = normalizeText(resultTitle);
     const normalizedSeries = normalizeText(seriesTitle);
 
@@ -104,7 +107,14 @@ function isLikelySameSeriesEpisode(resultTitle, seriesTitle, season, episode) {
         new RegExp(`\\bSeason\\s*0?${s}\\b`, "i").test(resultTitle) ||
         new RegExp(`\\bComplete\\b`, "i").test(resultTitle);
 
-    return exactEpisodeMatches || seasonPackMatches;
+    // Long-running anime is often released with absolute episode numbers
+    // (e.g. "One Piece - 945") that don't line up with TMDB's SxxExx
+    // grouping, so also accept a match on the absolute episode number.
+    const absoluteEpisodeMatches =
+        absoluteEpisode !== undefined &&
+        episodeNumberMatches(resultTitle, absoluteEpisode);
+
+    return exactEpisodeMatches || seasonPackMatches || absoluteEpisodeMatches;
 }
 
 function isLikelySameEpisodeFile(fileName, season, episode) {
@@ -127,7 +137,7 @@ function buildStreamTitle(prefix, file, sourceName, indexer, episodeText = "") {
     const indexerText = indexer ? ` | ${indexer}` : "";
     const epText = episodeText ? ` | ${episodeText}` : "";
 
-    return `DeepBlueStream\n${prefix}${epText} | ${quality} | ${size}${codecText}${indexerText}`;
+    return `${quality}${epText}\n${prefix} | ${size}${codecText}${indexerText}`;
 }
 
 async function safeCreateTorrentFromMagnet(magnet, title) {
@@ -145,18 +155,32 @@ async function safeCreateTorrentFromMagnet(magnet, title) {
     }
 }
 
-async function safeRequestDownloadLink(torrentId, fileId) {
-    try {
-        await sleep(TORBOX_REQUEST_DELAY_MS);
-        return await requestDownloadLink(torrentId, fileId);
-    } catch (err) {
-        console.error(
-            "requestDownloadLink failed:",
-            err.response?.data || err.message
-        );
+const DOWNLOAD_LINK_ATTEMPTS = 2;
 
-        return null;
+async function safeRequestDownloadLink(torrentId, fileId) {
+    for (let attempt = 1; attempt <= DOWNLOAD_LINK_ATTEMPTS; attempt++) {
+        try {
+            await sleep(TORBOX_REQUEST_DELAY_MS);
+            const url = await requestDownloadLink(torrentId, fileId);
+
+            if (url) {
+                return url;
+            }
+        } catch (err) {
+            console.error(
+                "requestDownloadLink failed:",
+                err.response?.data || err.message
+            );
+        }
+
+        // Torbox's DATABASE_ERROR response is usually transient, so retry
+        // once before giving up on this candidate.
+        if (attempt < DOWNLOAD_LINK_ATTEMPTS) {
+            console.log("Retrying requestDownloadLink for torrent", torrentId, "file", fileId);
+        }
     }
+
+    return null;
 }
 
 async function buildStreamsFromCachedTorrentResults(torrentResults, episodeText = "", season, episode) {
@@ -259,6 +283,10 @@ async function buildStreamsFromUncachedTorrentResults(torrentResults, episodeTex
     const candidates = torrentResults.slice(0, MAX_UNCACHED_ATTEMPTS);
 
     for (const result of candidates) {
+        if (streams.length >= MAX_SEARCH_STREAMS) {
+            break;
+        }
+
         const magnet = buildMagnetFromHash(result.infoHash, result.title);
 
         const createResult = await safeCreateTorrentFromMagnet(magnet, result.title);
@@ -381,7 +409,36 @@ async function searchCachedStreamsForMovie(movie) {
     return uncachedStreams;
 }
 
-async function searchCachedStreamsForSeriesEpisode(series, season, episode) {
+const SUBS_HINT_PATTERN = /multi[\s.-]?sub|soft[\s.-]?sub|\bsubs?\b/i;
+
+function hasSubsHint(title) {
+    return SUBS_HINT_PATTERN.test(title || "");
+}
+
+function sortByQualityAndSeeders(a, b) {
+    const titleA = a.title || "";
+    const titleB = b.title || "";
+
+    const qualityDiff = getQualityRank(titleB) - getQualityRank(titleA);
+
+    if (qualityDiff !== 0) {
+        return qualityDiff;
+    }
+
+    // Prefer releases whose title hints at subtitles, since re-resolving a
+    // deleted/uncached torrent otherwise tends to pick a dub-only encode.
+    const subsDiff = Number(hasSubsHint(titleB)) - Number(hasSubsHint(titleA));
+
+    if (subsDiff !== 0) {
+        return subsDiff;
+    }
+
+    const seedersA = a.seeders || 0;
+    const seedersB = b.seeders || 0;
+    return seedersB - seedersA;
+}
+
+async function searchCachedStreamsForSeriesEpisode(series, season, episode, absoluteEpisode) {
     const title = series.name;
     const seasonEpisode = formatSeasonEpisode(season, episode);
     const query = `${title} ${seasonEpisode}`;
@@ -396,24 +453,37 @@ async function searchCachedStreamsForSeriesEpisode(series, season, episode) {
         console.log("-", result.title);
     });
 
-    const torrentResults = prowlarrResults
+    let torrentResults = prowlarrResults
         .filter(result => result.protocol === "torrent")
         .filter(result => result.infoHash)
-        .filter(result => isLikelySameSeriesEpisode(result.title, title, season, episode))
-        .sort((a, b) => {
-            const titleA = a.title || "";
-            const titleB = b.title || "";
+        .filter(result => isLikelySameSeriesEpisode(result.title, title, season, episode, absoluteEpisode));
 
-            const qualityDiff = getQualityRank(titleB) - getQualityRank(titleA);
+    // TMDB's SxxExx grouping often doesn't line up with how long-running
+    // anime is actually released, so retry with a plain episode-number
+    // query (e.g. "One Piece 945") if the SxxExx search found nothing.
+    const fallbackEpisode = absoluteEpisode ?? episode;
 
-            if (qualityDiff !== 0) {
-                return qualityDiff;
-            }
+    if (torrentResults.length === 0 && fallbackEpisode !== undefined) {
+        const absoluteQuery = `${title} ${fallbackEpisode}`;
 
-            const seedersA = a.seeders || 0;
-            const seedersB = b.seeders || 0;
-            return seedersB - seedersA;
-        })
+        console.log("No SxxExx matches, retrying Prowlarr series episode search:", absoluteQuery);
+
+        const absoluteResults = await searchMovies(absoluteQuery);
+
+        console.log("Raw Prowlarr absolute-episode results:", absoluteResults.length);
+        console.log("Prowlarr absolute-episode titles:");
+        absoluteResults.slice(0, 10).forEach(result => {
+            console.log("-", result.title);
+        });
+
+        torrentResults = absoluteResults
+            .filter(result => result.protocol === "torrent")
+            .filter(result => result.infoHash)
+            .filter(result => isLikelySameSeriesEpisode(result.title, title, season, episode, absoluteEpisode));
+    }
+
+    torrentResults = torrentResults
+        .sort(sortByQualityAndSeeders)
         .slice(0, MAX_SEARCH_RESULTS);
 
     console.log("Filtered series episode torrent results:", torrentResults.length);

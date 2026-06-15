@@ -164,8 +164,7 @@ function isLikelyMovieMatch(torrentName, movieTitle, movieYear) {
 
     const titleMatches =
         normalizedTorrent === normalizedMovie ||
-        normalizedTorrent.startsWith(`${normalizedMovie} `) ||
-        normalizedTorrent.includes(` ${normalizedMovie} `);
+        normalizedTorrent.startsWith(`${normalizedMovie} `);
 
     const yearMatches =
         !movieYear ||

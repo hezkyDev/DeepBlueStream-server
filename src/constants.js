@@ -1,5 +1,7 @@
 const PORT = 7001;
 
+const PUBLIC_URL = process.env.PUBLIC_URL || "https://aminruls-macbook-pro-2.tailaf6f0f.ts.net";
+
 const PLACEHOLDER_POSTER =
     "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Placeholder_view_vector.svg/800px-Placeholder_view_vector.svg.png";
 
@@ -9,6 +11,7 @@ const TORRENTS_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_STREAMS_PER_ITEM = 8;
 const TORBOX_REQUEST_DELAY_MS = 700;
 const DOWNLOAD_LINK_CONCURRENCY = 4;
+const CDN_CHECK_TIMEOUT_MS = 4000;
 const CATALOG_PAGE_SIZE = 20;
 
 const MOVIE_GENRES = {
@@ -39,6 +42,7 @@ const SERIES_GENRES = {
 
 module.exports = {
     PORT,
+    PUBLIC_URL,
     PLACEHOLDER_POSTER,
     TORBOX_LIBRARY_LIMIT,
     TORBOX_RECENT_LIMIT,
@@ -46,6 +50,7 @@ module.exports = {
     MAX_STREAMS_PER_ITEM,
     TORBOX_REQUEST_DELAY_MS,
     DOWNLOAD_LINK_CONCURRENCY,
+    CDN_CHECK_TIMEOUT_MS,
     CATALOG_PAGE_SIZE,
     MOVIE_GENRES,
     SERIES_GENRES

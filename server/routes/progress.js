@@ -47,7 +47,7 @@ router.post("/", (req, res) => {
     db.prepare(
         `INSERT INTO watch_progress (profile_id, media_id, type, season, episode, position_seconds, duration_seconds, updated_at)
          VALUES (@profileId, @mediaId, @type, @season, @episode, @positionSeconds, @durationSeconds, strftime('%s','now'))
-         ON CONFLICT(profile_id, media_id, season, episode)
+         ON CONFLICT(profile_id, media_id, IFNULL(season, -1), IFNULL(episode, -1))
          DO UPDATE SET position_seconds = @positionSeconds, duration_seconds = @durationSeconds, updated_at = strftime('%s','now')`
     ).run({
         profileId: req.profileId,

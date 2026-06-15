@@ -5,6 +5,7 @@ const {
     getSeriesDetails,
     searchMovie,
     searchSeries,
+    searchAnime,
     discoverMovies,
     discoverSeries
 } = require("../services/tmdb");
@@ -45,11 +46,12 @@ async function catalogHandler({ type, id, extra }) {
 
         if (id === "torbox-trending-anime") {
             if (extra && extra.search) {
-                const searchResults = await searchSeries(extra.search);
+                const searchResults = await searchAnime(extra.search);
                 return { metas: searchResults.map(series => seriesToMeta(series, "anime")) };
             }
 
-            return { metas: [] };
+            const animeSeries = await discoverSeries({ genreId: MOVIE_GENRES.Animation, originCountry: "JP" });
+            return { metas: animeSeries.map(series => seriesToMeta(series, "anime")) };
         }
 
         if (id === "torbox-movies") {
@@ -71,7 +73,7 @@ async function catalogHandler({ type, id, extra }) {
 
         if (id === "torbox-anime") {
             if (extra && extra.search) {
-                const searchResults = await searchSeries(extra.search);
+                const searchResults = await searchAnime(extra.search);
                 return { metas: searchResults.map(series => seriesToMeta(series, "anime")) };
             }
 

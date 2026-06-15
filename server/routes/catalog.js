@@ -1,8 +1,8 @@
 const express = require("express");
 const db = require("../db");
 const { requireProfile } = require("../middleware/profile");
-const { getTrendingMovies, getMovieDetails, discoverMovies } = require("../../src/services/tmdb");
-const { movieToMeta } = require("../../src/lib/metaMappers");
+const { getTrendingMovies, getMovieDetails, getSeriesDetails, discoverMovies } = require("../../src/services/tmdb");
+const { movieToMeta, seriesToMeta } = require("../../src/lib/metaMappers");
 const { MOVIE_GENRES } = require("../../src/constants");
 const { PROGRESS_MIN_RATIO, PROGRESS_DONE_RATIO } = require("../constants");
 
@@ -92,14 +92,19 @@ async function buildGenreRows() {
 
 async function buildMyList(profileId) {
     const rows = db
-        .prepare("SELECT tmdb_id FROM favorites WHERE profile_id = ? AND type = 'movie' ORDER BY added_at DESC")
+        .prepare("SELECT type, tmdb_id FROM favorites WHERE profile_id = ? ORDER BY added_at DESC")
         .all(profileId);
 
     const items = await Promise.all(
         rows.map(async row => {
             try {
-                const movie = await getMovieDetails(row.tmdb_id);
-                return movieToMeta(movie);
+                if (row.type === "movie") {
+                    const movie = await getMovieDetails(row.tmdb_id);
+                    return movieToMeta(movie);
+                }
+
+                const series = await getSeriesDetails(row.tmdb_id);
+                return seriesToMeta(series, row.type);
             } catch (err) {
                 console.error("My list enrich error:", err.message);
                 return null;

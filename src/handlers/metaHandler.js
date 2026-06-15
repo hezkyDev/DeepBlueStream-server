@@ -18,21 +18,32 @@ const {
     getTorrentGroupKey
 } = require("../lib/torboxLibrary");
 
+const {
+    buildSeriesVideos,
+    extractCast,
+    extractDirectors,
+    extractMovieContentRating,
+    extractSeriesContentRating
+} = require("../lib/metaMappers");
 const { PLACEHOLDER_POSTER } = require("../constants");
 
 async function metaHandler({ id }) {
     console.log("META REQUEST:", id);
 
     try {
-        if (id.startsWith("dbs-series:")) {
-            const tmdbId = id.replace("dbs-series:", "");
+        if (id.startsWith("dbs-series:") || id.startsWith("dbs-anime:")) {
+            const type = id.startsWith("dbs-anime:") ? "anime" : "series";
+            const idPrefix = type === "anime" ? "dbs-anime" : "dbs-series";
+            const tmdbId = id.replace(`${idPrefix}:`, "");
+
             const series = await getSeriesDetails(tmdbId);
             const trailerStreams = extractTrailers(await getSeriesVideos(tmdbId));
+            const videos = await buildSeriesVideos(series, idPrefix);
 
             return {
                 meta: {
                     id,
-                    type: "series",
+                    type,
                     name: series.name,
                     poster: series.poster_path
                         ? `https://image.tmdb.org/t/p/w500${series.poster_path}`
@@ -43,30 +54,13 @@ async function metaHandler({ id }) {
                     description: series.overview,
                     releaseInfo: series.first_air_date,
                     genres: series.genres ? series.genres.map(g => g.name) : [],
-                    trailerStreams
-                }
-            };
-        }
-
-        if (id.startsWith("dbs-anime:")) {
-            const tmdbId = id.replace("dbs-anime:", "");
-            const series = await getSeriesDetails(tmdbId);
-            const trailerStreams = extractTrailers(await getSeriesVideos(tmdbId));
-
-            return {
-                meta: {
-                    id,
-                    type: "anime",
-                    name: series.name,
-                    poster: series.poster_path
-                        ? `https://image.tmdb.org/t/p/w500${series.poster_path}`
-                        : PLACEHOLDER_POSTER,
-                    background: series.backdrop_path
-                        ? `https://image.tmdb.org/t/p/original${series.backdrop_path}`
-                        : undefined,
-                    description: series.overview,
-                    releaseInfo: series.first_air_date,
-                    genres: series.genres ? series.genres.map(g => g.name) : [],
+                    cast: extractCast(series),
+                    director: extractDirectors(series),
+                    contentRating: extractSeriesContentRating(series),
+                    language: series.original_language,
+                    country: (series.origin_country || []).join(", ") || undefined,
+                    imdbRating: series.vote_average ? series.vote_average.toFixed(1) : undefined,
+                    videos,
                     trailerStreams
                 }
             };
@@ -92,6 +86,11 @@ async function metaHandler({ id }) {
                     releaseInfo: movie.release_date,
                     runtime: movie.runtime ? `${movie.runtime} min` : undefined,
                     genres: movie.genres ? movie.genres.map(g => g.name) : [],
+                    cast: extractCast(movie),
+                    director: extractDirectors(movie),
+                    contentRating: extractMovieContentRating(movie),
+                    language: movie.original_language,
+                    imdbRating: movie.vote_average ? movie.vote_average.toFixed(1) : undefined,
                     trailerStreams
                 }
             };

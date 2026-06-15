@@ -1,11 +1,16 @@
 require("dotenv").config();
 
+const path = require("path");
 const express = require("express");
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 
 const manifest = require("./manifest");
 const { PORT } = require("./constants");
 const { getHealth, getStatus } = require("./health");
+const { validateEnv } = require("./lib/validateEnv");
+const { renderLandingPage, renderNotFoundPage } = require("./lib/page");
+
+validateEnv();
 
 const catalogHandler = require("./handlers/catalogHandler");
 const metaHandler = require("./handlers/metaHandler");
@@ -21,6 +26,12 @@ builder.defineSubtitlesHandler(subtitlesHandler);
 
 const app = express();
 
+app.use(express.static(path.join(__dirname, "..", "public")));
+
+app.get("/", (_req, res) => {
+    res.send(renderLandingPage());
+});
+
 app.get("/health", (_req, res) => {
     res.json(getHealth());
 });
@@ -30,6 +41,10 @@ app.get("/status", async (_req, res) => {
 });
 
 app.use(getRouter(builder.getInterface()));
+
+app.use((_req, res) => {
+    res.status(404).send(renderNotFoundPage());
+});
 
 app.listen(PORT, () => {
     console.log(`DeepBlueStream running on port ${PORT}`);

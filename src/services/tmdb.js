@@ -6,6 +6,8 @@ const BASE_URL = "https://api.themoviedb.org/3";
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const cache = new Map();
 
+const ANIMATION_GENRE_ID = 16;
+
 async function withCache(key, fn) {
     const cached = cache.get(key);
 
@@ -59,7 +61,8 @@ async function getMovieDetails(movieId) {
         const response = await axios.get(`${BASE_URL}/movie/${movieId}`, {
             params: {
                 api_key: API_KEY,
-                language: "en-US"
+                language: "en-US",
+                append_to_response: "credits,release_dates"
             }
         });
 
@@ -70,6 +73,20 @@ async function getMovieDetails(movieId) {
 async function getSeriesDetails(seriesId) {
     return withCache(`series:${seriesId}`, async () => {
         const response = await axios.get(`${BASE_URL}/tv/${seriesId}`, {
+            params: {
+                api_key: API_KEY,
+                language: "en-US",
+                append_to_response: "credits,content_ratings"
+            }
+        });
+
+        return response.data;
+    });
+}
+
+async function getSeasonDetails(seriesId, seasonNumber) {
+    return withCache(`season:${seriesId}:${seasonNumber}`, async () => {
+        const response = await axios.get(`${BASE_URL}/tv/${seriesId}/season/${seasonNumber}`, {
             params: {
                 api_key: API_KEY,
                 language: "en-US"
@@ -138,8 +155,8 @@ async function discoverMovies({ genreId, page = 1 } = {}) {
     });
 }
 
-async function discoverSeries({ genreId, page = 1 } = {}) {
-    return withCache(`discover:series:${genreId || "all"}:${page}`, async () => {
+async function discoverSeries({ genreId, page = 1, originCountry } = {}) {
+    return withCache(`discover:series:${genreId || "all"}:${originCountry || "any"}:${page}`, async () => {
         const params = {
             api_key: API_KEY,
             language: "en-US",
@@ -152,10 +169,27 @@ async function discoverSeries({ genreId, page = 1 } = {}) {
             params.with_genres = genreId;
         }
 
+        if (originCountry) {
+            params.with_origin_country = originCountry;
+        }
+
         const response = await axios.get(`${BASE_URL}/discover/tv`, { params });
 
         return response.data.results || [];
     });
+}
+
+function isAnimeResult(series) {
+    const genreIds = series.genre_ids || (series.genres ? series.genres.map(g => g.id) : []);
+    const originCountries = series.origin_country || [];
+
+    return genreIds.includes(ANIMATION_GENRE_ID) && originCountries.includes("JP");
+}
+
+async function searchAnime(query, year) {
+    const results = await searchSeries(query, year);
+
+    return results.filter(isAnimeResult);
 }
 
 async function getMovieVideos(movieId) {
@@ -236,8 +270,11 @@ module.exports = {
     getTrendingSeries,
     getMovieDetails,
     getSeriesDetails,
+    getSeasonDetails,
     searchMovie,
     searchSeries,
+    searchAnime,
+    isAnimeResult,
     getMovieByImdbId,
     getSeriesByImdbId,
     discoverMovies,
