@@ -13,7 +13,7 @@ const {
 } = require("../services/searchStreams");
 
 const { findFavoriteByTmdbId } = require("../services/favorites");
-const { onFavoritePlayback } = require("../services/favoritesScheduler");
+const { onFavoritePlayback, trackEpisodeTorrent } = require("../services/favoritesScheduler");
 
 const {
     getMyTorrentsCached,
@@ -178,12 +178,20 @@ async function resolveSeriesEpisodeStreams(series, type, season, episode) {
         streams.push(...cachedSearchStreams);
     }
 
+    const playedTorrentId = streams.find(stream => stream.torrentId)?.torrentId;
+
+    if ((type === "anime" || type === "series") && season !== undefined && episode !== undefined && playedTorrentId) {
+        // Track every resolved series-episode torrent (favorites or not) so
+        // that when the user reports progress on a newer episode, we can
+        // auto-remove this one from their Torbox library.
+        trackEpisodeTorrent(`${type}:${series.id}`, season, episode, playedTorrentId);
+    }
+
     const favoriteType = (type === "anime" || type === "series")
         ? findFavoriteByTmdbId(type, series.id)
         : undefined;
 
     if (favoriteType && season !== undefined && episode !== undefined) {
-        const playedTorrentId = streams.find(stream => stream.torrentId)?.torrentId;
         onFavoritePlayback(series, season, episode, playedTorrentId);
     }
 

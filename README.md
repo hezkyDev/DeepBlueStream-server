@@ -1,6 +1,15 @@
-# DeepBlueStream
+# DeepBlueStream-server
 
-A personal Stremio addon that combines [TMDB](https://www.themoviedb.org/) metadata with [Torbox](https://torbox.app/) for cached/uncached torrent playback, [Prowlarr](https://prowlarr.com/) for fallback torrent search, and [OpenSubtitles](https://www.opensubtitles.com/) for subtitles.
+A personal backend that combines [TMDB](https://www.themoviedb.org/) metadata with [Torbox](https://torbox.app/) for cached/uncached torrent playback, [Prowlarr](https://prowlarr.com/) for fallback torrent search, and [OpenSubtitles](https://www.opensubtitles.com/) for subtitles.
+
+It hosts **two independent servers** from the same codebase:
+
+| Server | Entry point | Start command | Default port | Consumer |
+| --- | --- | --- | --- | --- |
+| **Stremio add-on** | `src/addon.js` | `npm start` | `7001` | Stremio (via `/manifest.json`) |
+| **Client API** | `server/index.js` | `npm run start:server` | `7002` | the [DeepBlueStream-client](https://github.com/hezkyDev/DeepBlueStream-client) app (REST under `/api`) |
+
+Both share the same service layer (TMDB, Torbox, Prowlarr, OpenSubtitles) but expose it differently: the add-on speaks the Stremio add-on protocol, while the client API is a plain JSON REST API.
 
 ## Features
 
@@ -34,13 +43,34 @@ A personal Stremio addon that combines [TMDB](https://www.themoviedb.org/) metad
    cp .env.example .env
    ```
 
-3. Start the addon:
+3. Start the server(s) you need:
 
    ```bash
+   # Stremio add-on (port 7001)
    npm start
+
+   # Client API used by DeepBlueStream-client (port 7002)
+   npm run start:server
    ```
 
-   By default the addon serves on `http://127.0.0.1:7001`.
+   The add-on serves on `http://127.0.0.1:7001` and the client API on `http://127.0.0.1:7002`. They run as separate processes — start the add-on for Stremio, the client API for the app, or both.
+
+## Client API
+
+The client API (`server/index.js`, port `7002`) backs the DeepBlueStream-client app. It mounts the following routers under `/api`:
+
+| Route | Purpose |
+| --- | --- |
+| `/api/profiles` | Profile management |
+| `/api/progress` | Playback progress tracking |
+| `/api/favorites` | Favorites (My List) |
+| `/api` (catalog) | Home rows and catalogs |
+| `/api/meta` | Title metadata / details |
+| `/api/stream` | Stream sources for a title |
+| `/api/search` | Search across movies, series, anime |
+| `/api/skip-times` | Intro/outro skip markers |
+
+Persistent client data lives in `server/data/` (SQLite, managed via `server/db`). The client points at this server via its `API_BASE_URL` (defaults to `http://127.0.0.1:7002`).
 
 ## Installing in Stremio
 
@@ -71,7 +101,7 @@ tailscale funnel --bg 7001
 ## Project structure
 
 ```
-src/
+src/                        # Stremio add-on (port 7001)
   addon.js                 # Stremio addon manifest, catalog/meta/stream/subtitle handlers
   data/
     favorites.json          # Favorites store (managed via favorites service)
@@ -83,6 +113,13 @@ src/
     opensubtitles.js          # OpenSubtitles client
     favorites.js              # Favorites CRUD (JSON-backed)
     favoritesScheduler.js     # Pre-cache next episode / cleanup watched episodes
+    skipTimes.js              # Intro/outro skip-time lookup
+server/                     # Client REST API (port 7002)
+  index.js                 # Express app, mounts /api routers
+  routes/                  # profiles, progress, favorites, catalog, meta, stream, search, skipTimes
+  db/                      # SQLite access layer (better-sqlite3)
+  data/                    # Persistent client data (SQLite database)
+  middleware/              # Express middleware
 test/                       # Manual test scripts for individual services
 ```
 

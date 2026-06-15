@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { requireProfile } = require("../middleware/profile");
 const { PROGRESS_MIN_RATIO, PROGRESS_DONE_RATIO } = require("../constants");
+const { onSeriesProgress } = require("../../src/services/favoritesScheduler");
 
 const router = express.Router();
 
@@ -58,6 +59,19 @@ router.post("/", (req, res) => {
         positionSeconds,
         durationSeconds: durationSeconds ?? null
     });
+
+    if ((type === "series" || type === "anime") && season !== undefined && episode !== undefined) {
+        // Derive the tmdbId from mediaId formats like "dbs-series:1399:1:1".
+        const parts = String(mediaId).split(":");
+        const tmdbId = parts.length >= 2 ? parts[1] : null;
+
+        if (tmdbId) {
+            // Fire-and-forget: don't block the progress write on Torbox.
+            onSeriesProgress(`${type}:${tmdbId}`, Number(season), Number(episode)).catch(err => {
+                console.error("onSeriesProgress failed:", err.message);
+            });
+        }
+    }
 
     res.status(204).end();
 });

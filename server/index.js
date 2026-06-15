@@ -12,6 +12,7 @@ const catalogRouter = require("./routes/catalog");
 const metaRouter = require("./routes/meta");
 const streamRouter = require("./routes/stream");
 const searchRouter = require("./routes/search");
+const skipTimesRouter = require("./routes/skipTimes");
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use("/api", catalogRouter);
 app.use("/api/meta", metaRouter);
 app.use("/api/stream", streamRouter);
 app.use("/api/search", searchRouter);
+app.use("/api/skip-times", skipTimesRouter);
 
 app.listen(API_PORT, () => {
     console.log(`DeepBlueStream API server listening on port ${API_PORT}`);

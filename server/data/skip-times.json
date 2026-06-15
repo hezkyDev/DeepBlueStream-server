@@ -1,0 +1,10 @@
+{
+    "_comment": "Per-episode intro/outro overrides. Key format: '<tmdbId>/<season>/<episode>'. Times in seconds. Anime is fetched from AniSkip API automatically; use this file for non-anime series or to override AniSkip data.",
+    "_example": "1399/1/1 represents Game of Thrones S01E01 (TMDB ID 1399). Replace with real entries below.",
+    "_template": {
+        "1399/1/1": {
+            "intro": { "start": 7, "end": 105 },
+            "outro": { "start": 3530, "end": 3590 }
+        }
+    }
+}
