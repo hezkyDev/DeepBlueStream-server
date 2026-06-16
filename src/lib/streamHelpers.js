@@ -5,6 +5,18 @@ const { sleep, normalizeText } = require("../utils");
 const { extractEpisodeNumber } = require("./torboxLibrary");
 const { TORBOX_REQUEST_DELAY_MS, CDN_CHECK_TIMEOUT_MS } = require("../constants");
 
+// Torbox returns download URLs with the `filename` query value left literal
+// (spaces, brackets, etc.), which is a malformed URL. Lenient players cope, but
+// stricter HTTP clients reject it. Re-serialise through the URL parser so the
+// query is properly percent-encoded before we hand it to clients.
+function normalizeDownloadUrl(rawUrl) {
+    try {
+        return new URL(rawUrl).toString();
+    } catch {
+        return rawUrl;
+    }
+}
+
 async function isCdnUrlReachable(url) {
     try {
         await axios.get(url, {
@@ -26,7 +38,8 @@ async function safeRequestDownloadLink(torrentId, fileId) {
     for (let attempt = 1; attempt <= DOWNLOAD_LINK_ATTEMPTS; attempt++) {
         try {
             await sleep(TORBOX_REQUEST_DELAY_MS);
-            const url = await requestDownloadLink(torrentId, fileId);
+            const rawUrl = await requestDownloadLink(torrentId, fileId);
+            const url = rawUrl ? normalizeDownloadUrl(rawUrl) : rawUrl;
 
             if (url && (await isCdnUrlReachable(url))) {
                 return url;
@@ -167,10 +180,14 @@ function seriesTitleMatches(groupTitle, tmdbTitle) {
     );
 }
 
+// Order of preference for the DEFAULT (auto-played) source. 1080p is ranked
+// highest as the best balance of quality vs bandwidth; 4K is deprioritised
+// because its bitrate buffers badly on slower links (it's still offered, just
+// lower in the list). Users can always pick another source.
 const QUALITY_RANK = {
-    "4K": 4,
-    "1080p": 3,
-    "720p": 2,
+    "1080p": 4,
+    "720p": 3,
+    "4K": 2,
     "480p": 1,
     "Unknown": 0
 };
