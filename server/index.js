@@ -2,8 +2,10 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 const { API_PORT } = require("./constants");
+const requireApiToken = require("./middleware/requireApiToken");
 
 const profilesRouter = require("./routes/profiles");
 const progressRouter = require("./routes/progress");
@@ -18,6 +20,20 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Throttle abuse on the public endpoint (per-IP). Generous enough for normal
+// app use (home + browsing fan out to several calls).
+app.use(
+    rateLimit({
+        windowMs: 60 * 1000,
+        max: 300,
+        standardHeaders: true,
+        legacyHeaders: false
+    })
+);
+
+// All API routes require the shared bearer token (see requireApiToken).
+app.use("/api", requireApiToken);
 
 app.use("/api/profiles", profilesRouter);
 app.use("/api/progress", progressRouter);
