@@ -1,4 +1,8 @@
-const axios = require("axios");
+// Use an axios instance with a request timeout so a slow/hung TMDB call can't
+// stall the whole /api/home response (each builder catches and degrades to an
+// empty result). Without this, a stuck connection waits for the OS-level
+// ETIMEDOUT (~75s) and the client gives up with "Failed to load".
+const axios = require("axios").create({ timeout: 10000 });
 
 const API_KEY = process.env.TMDB_API_KEY;
 const BASE_URL = "https://api.themoviedb.org/3";

@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireProfile } = require("../middleware/profile");
-const { PROGRESS_MIN_RATIO, PROGRESS_DONE_RATIO } = require("../constants");
+const { PROGRESS_MIN_RATIO } = require("../constants");
 const { onSeriesProgress } = require("../../src/services/favoritesScheduler");
 
 const router = express.Router();
@@ -22,8 +22,11 @@ router.get("/", (req, res) => {
                 return true;
             }
 
+            // Drop accidental sub-2% scrubs, but keep finished episodes: the
+            // client needs to see them to advance "next up" to the following
+            // episode instead of resuming the one that just ended.
             const ratio = row.position_seconds / row.duration_seconds;
-            return ratio >= PROGRESS_MIN_RATIO && ratio <= PROGRESS_DONE_RATIO;
+            return ratio >= PROGRESS_MIN_RATIO;
         })
         .map(row => ({
             mediaId: row.media_id,
